@@ -1,0 +1,197 @@
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import tkinter as tk
+from tkinter import ttk
+from PIL import Image, ImageTk
+import scipy.io as sio
+from scipy.fft import rfft
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
+from sklearn.ensemble import RandomForestClassifier
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout, GRU, LSTM
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.callbacks import EarlyStopping
+
+# === Paths and Labels ===
+data_dir = r"C:\path\to\your\data"  # anonymized path
+graph_dir = os.path.join(".", "graphs")
+os.makedirs(graph_dir, exist_ok=True)
+
+label_map = {
+    "Normal": 0,
+    "B007": 1,
+    "IR007": 2,
+    "OR0076": 3
+}
+class_names = ['Normal', 'Ball', 'Inner', 'Outer']
+
+# === Load Data Function ===
+def load_segments_fft(data_dir, label_map, window_size=1024, step=512, fft_bins=50):
+    X, y = [] , []
+    for file in os.listdir(data_dir):
+        if not file.endswith(".mat"):
+            continue
+        path = os.path.join(data_dir, file)
+        mat = sio.loadmat(path)
+        key = [k for k in mat if k.endswith("_DE_time")]
+        if not key:
+            continue
+        signal = mat[key[0]].ravel()
+        for prefix, label in label_map.items():
+            if file.startswith(prefix):
+                break
+        else:
+            continue
+        for start in range(0, len(signal) - window_size, step):
+            segment = signal[start:start + window_size]
+            features = np.abs(rfft(segment))[:fft_bins]
+            X.append(features)
+            y.append(label)
+    return np.array(X), np.array(y)
+
+# === Data Preparation ===
+X, y = load_segments_fft(data_dir, label_map)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, stratify=y, random_state=42)
+
+X_train_3d = X_train.reshape(-1, X_train.shape[1], 1)
+X_test_3d = X_test.reshape(-1, X_test.shape[1], 1)
+y_train_cat = to_categorical(y_train, num_classes=4)
+y_test_cat = to_categorical(y_test, num_classes=4)
+
+model_reports = {}
+graph_files = {}
+img_counter = 0
+
+def get_img_name():
+    global img_counter
+    img_counter += 1
+    return f"img_{str(img_counter).zfill(3)}.png"
+
+def plot_confusion_matrix(cm, title):
+    fname = get_img_name()
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=class_names, yticklabels=class_names)
+    plt.title(title)
+    plt.xlabel("Predicted")
+    plt.ylabel("Actual")
+    plt.tight_layout()
+    plt.savefig(os.path.join(graph_dir, fname), dpi=300)
+    plt.close()
+    return fname
+
+def plot_history(history, model_name):
+    acc_file = get_img_name()
+    loss_file = get_img_name()
+
+    plt.figure(figsize=(10, 4))
+    plt.plot(history.history['accuracy'], label='Train')
+    plt.plot(history.history['val_accuracy'], label='Validation')
+    plt.title(f"{model_name} Accuracy")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(graph_dir, acc_file), dpi=300)
+    plt.close()
+
+    plt.figure(figsize=(10, 4))
+    plt.plot(history.history['loss'], label='Train')
+    plt.plot(history.history['val_loss'], label='Validation')
+    plt.title(f"{model_name} Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(graph_dir, loss_file), dpi=300)
+    plt.close()
+
+    return acc_file, loss_file
+
+# === GRU Model ===
+gru_model = Sequential([
+    GRU(64, input_shape=(X_train.shape[1], 1)),
+    Dropout(0.5),
+    Dense(4, activation='softmax')
+])
+gru_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+gru_history = gru_model.fit(X_train_3d, y_train_cat, epochs=15, batch_size=64,
+                            validation_split=0.2, callbacks=[EarlyStopping(patience=3)], verbose=0)
+
+y_pred_gru = np.argmax(gru_model.predict(X_test_3d), axis=1)
+acc_gru = accuracy_score(y_test, y_pred_gru)
+cm_gru = confusion_matrix(y_test, y_pred_gru)
+report_gru = classification_report(y_test, y_pred_gru, target_names=class_names)
+model_reports['GRU'] = f"Accuracy: {acc_gru:.2%}\n\n{report_gru}"
+graph_files['GRU_CM'] = plot_confusion_matrix(cm_gru, "GRU Confusion Matrix")
+graph_files['GRU_ACC'], graph_files['GRU_LOSS'] = plot_history(gru_history, "GRU")
+
+# === LSTM Model ===
+lstm_model = Sequential([
+    LSTM(64, input_shape=(X_train.shape[1], 1)),
+    Dropout(0.5),
+    Dense(4, activation='softmax')
+])
+lstm_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+lstm_history = lstm_model.fit(X_train_3d, y_train_cat, epochs=15, batch_size=64,
+                              validation_split=0.2, callbacks=[EarlyStopping(patience=3)], verbose=0)
+
+y_pred_lstm = np.argmax(lstm_model.predict(X_test_3d), axis=1)
+acc_lstm = accuracy_score(y_test, y_pred_lstm)
+cm_lstm = confusion_matrix(y_test, y_pred_lstm)
+report_lstm = classification_report(y_test, y_pred_lstm, target_names=class_names)
+model_reports['LSTM'] = f"Accuracy: {acc_lstm:.2%}\n\n{report_lstm}"
+graph_files['LSTM_CM'] = plot_confusion_matrix(cm_lstm, "LSTM Confusion Matrix")
+graph_files['LSTM_ACC'], graph_files['LSTM_LOSS'] = plot_history(lstm_history, "LSTM")
+
+# === Random Forest ===
+rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+rf_model.fit(X_train, y_train)
+y_pred_rf = rf_model.predict(X_test)
+acc_rf = accuracy_score(y_test, y_pred_rf)
+cm_rf = confusion_matrix(y_test, y_pred_rf)
+report_rf = classification_report(y_test, y_pred_rf, target_names=class_names)
+model_reports['RF'] = f"Accuracy: {acc_rf:.2%}\n\n{report_rf}"
+graph_files['RF_CM'] = plot_confusion_matrix(cm_rf, "RF Confusion Matrix")
+
+# === GUI to display graphs ===
+def show_image(img_name, model):
+    img_path = os.path.join(graph_dir, img_name)
+    if os.path.exists(img_path):
+        img = Image.open(img_path)
+        img = img.resize((600, 400))
+        img_tk = ImageTk.PhotoImage(img)
+        graph_label.config(image=img_tk)
+        graph_label.image = img_tk
+        acc_label.config(text=model_reports[model])
+
+root = tk.Tk()
+root.title("Model Performance Viewer")
+root.geometry("850x700")
+
+graph_options = {
+    "GRU Confusion Matrix": ('GRU_CM', 'GRU'),
+    "GRU Accuracy": ('GRU_ACC', 'GRU'),
+    "GRU Loss": ('GRU_LOSS', 'GRU'),
+    "LSTM Confusion Matrix": ('LSTM_CM', 'LSTM'),
+    "LSTM Accuracy": ('LSTM_ACC', 'LSTM'),
+    "LSTM Loss": ('LSTM_LOSS', 'LSTM'),
+    "RF Confusion Matrix": ('RF_CM', 'RF'),
+}
+
+combo = ttk.Combobox(root, values=list(graph_options.keys()), width=60)
+combo.pack(pady=10)
+combo.set("Select a graph to display")
+
+btn = tk.Button(root, text="Show Graph", command=lambda: show_image(*graph_options[combo.get()]))
+btn.pack(pady=5)
+
+graph_label = tk.Label(root)
+graph_label.pack(pady=10)
+
+acc_label = tk.Label(root, text="", font=("Arial", 12))
+acc_label.pack(pady=5)
+
+root.mainloop()
