@@ -43,5 +43,7 @@ Below are some screenshots illustrating various aspects of the system:
 
 ![Web-Based Dashboard](https://github.com/user-attachments/assets/793ec1a4-b5ff-455f-9f95-d556b13d099f)
 
+[vibration.pdf](https://github.com/user-attachments/files/21206888/vibration.pdf)
+
 ---
 This project is a step toward smarter predictive maintenance solutions in industrial settings, ensuring both cost savings and operational efficiency.
